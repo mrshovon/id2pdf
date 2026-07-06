@@ -15,7 +15,6 @@
         position: fixed;
         width: 100%;
       }
-      /* Translucent shade around the live frame overlay boundary box */
       .scan-mask {
         box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.75);
       }
@@ -47,8 +46,8 @@
         HD Live ID Scanner
       </h1>
       <p class="text-gray-400 text-xs text-center mb-6">
-        Captures maximum hardware resolution to eliminate print blur and enhance
-        text readability.
+        Captures maximum hardware resolution to eliminate print blur. Generates,
+        downloads, and shares the file directly.
       </p>
 
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
@@ -94,10 +93,10 @@
       </div>
 
       <button
-        onclick="generateHDCompactPDF()"
+        onclick="processAndExecutePDF()"
         class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-4 rounded-xl transition shadow-lg flex justify-center items-center gap-2"
       >
-        📄 Generate Print-Ready PDF
+        📄 Download & Share PDF
       </button>
     </div>
 
@@ -172,7 +171,6 @@
         banner.classList.remove("hidden");
 
         try {
-          // FORCE ULTRA-HIGH RESOLUTION CAPTURE: Requests 4K/Full HD hardware arrays safely
           localCameraStream = await navigator.mediaDevices.getUserMedia({
             video: {
               facingMode: "environment",
@@ -188,11 +186,9 @@
           document.body.classList.add("no-scroll");
           document.getElementById("scanner-modal").classList.remove("hidden");
         } catch (err) {
-          console.error("Camera connection error profile:", err);
+          console.error(err);
           banner.classList.add("hidden");
-          alert(
-            "Could not initialize high-definition stream interface. Check site settings inside your browser address bar.",
-          );
+          alert("Could not initialize high-definition stream interface.");
         }
       }
 
@@ -202,7 +198,6 @@
         }
         document.body.classList.remove("no-scroll");
         document.getElementById("scanner-modal").classList.add("hidden");
-        document.getElementById("permission-banner").classList.add("hidden");
       }
 
       function captureSnapshot() {
@@ -210,24 +205,22 @@
         const canvas = document.getElementById("crop-canvas");
         const ctx = canvas.getContext("2d");
 
-        // Capture raw frame configuration directly at source camera's true pixel resolution
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-        // Compute alignment mappings relative to display overlay limits
         const guideBox = document.getElementById("view-guide");
         const parent = document.getElementById("video-parent");
 
-        const pw = parent.clientWidth;
-        const ph = parent.clientHeight;
-        const gw = guideBox.clientWidth;
-        const gh = guideBox.clientHeight;
-        const gl = guideBox.offsetLeft;
-        const gt = guideBox.offsetTop;
+        const pw = parent.clientWidth,
+          ph = parent.clientHeight;
+        const gw = guideBox.clientWidth,
+          gh = guideBox.clientHeight;
+        const gl = guideBox.offsetLeft,
+          gt = guideBox.offsetTop;
 
-        const parentRatio = pw / ph;
-        const videoRatio = canvas.width / canvas.height;
+        const parentRatio = pw / ph,
+          videoRatio = canvas.width / canvas.height;
 
         let renderW, renderH, offsetX, offsetY;
         if (videoRatio > parentRatio) {
@@ -250,14 +243,11 @@
         const srcW = gw * scaleFactorX;
         const srcH = gh * scaleFactorY;
 
-        // Generate an uncompressed high-density canvas layer output matching 300+ DPI scales
         const sliceCanvas = document.createElement("canvas");
-        sliceCanvas.width = 2000; // Drastically high density frame size
+        sliceCanvas.width = 2000;
         sliceCanvas.height = Math.round(2000 / 1.58);
 
         const sliceCtx = sliceCanvas.getContext("2d");
-
-        // Enable crisp scaling algorithms inside the canvas buffer
         sliceCtx.imageSmoothingEnabled = true;
         sliceCtx.imageSmoothingQuality = "high";
 
@@ -273,7 +263,6 @@
           sliceCanvas.height,
         );
 
-        // Export at absolute maximum quality (1.0 index ratio context) to avoid compression blur
         const isolatedDataUrl = sliceCanvas.toDataURL("image/jpeg", 1.0);
         cardImagesState[scanningTargetSide] = isolatedDataUrl;
 
@@ -291,7 +280,7 @@
         closeLiveScanner();
       }
 
-      function generateHDCompactPDF() {
+      async function processAndExecutePDF() {
         if (!cardImagesState.front || !cardImagesState.back) {
           alert(
             "Please scan both front and back slots before compiling the PDF.",
@@ -303,12 +292,10 @@
         const pdf = new jsPDF("p", "mm", "a4");
         const pageWidth = 210;
 
-        // ENLARGED BY 25%: Scaled up perfectly to 81.25mm width format parameters
         const imgWidthMM = 81.25;
         const imgHeightMM = 81.25 / 1.58;
         const xOffset = (pageWidth - imgWidthMM) / 2;
 
-        // Place high-density images without adding text lines onto the page canvas
         pdf.addImage(
           cardImagesState.front,
           "JPEG",
@@ -330,7 +317,36 @@
           "FAST",
         );
 
-        pdf.save("HD_Printable_ID_Document.pdf");
+        const fileName = "HD_ID_Document.pdf";
+
+        // 1. Force standard download behavior on the device
+        pdf.save(fileName);
+
+        // 2. Check if the browser supports sharing binary files natively
+        const pdfBlob = pdf.output("blob");
+        const fileToShare = new File([pdfBlob], fileName, {
+          type: "application/pdf",
+        });
+
+        if (
+          navigator.canShare &&
+          navigator.canShare({ files: [fileToShare] })
+        ) {
+          try {
+            // Triggers mobile share dashboard (WhatsApp, Messenger, Drive etc.)
+            await navigator.share({
+              files: [fileToShare],
+              title: "ID Card Document",
+              text: "Shared from Live ID Scanner application.",
+            });
+          } catch (shareErr) {
+            console.log("Sharing dismissed or failed:", shareErr);
+          }
+        } else {
+          console.log(
+            "Web Share API for files is not supported on this platform/browser combination.",
+          );
+        }
       }
     </script>
   </body>
