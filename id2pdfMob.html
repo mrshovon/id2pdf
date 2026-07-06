@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Live ID Card Scanner</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <style>
+        .no-scroll { overflow: hidden; position: fixed; width: 100%; }
+        /* Translucent shade around the live frame overlay boundary box */
+        .scan-mask {
+            box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.7);
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 font-sans min-h-screen flex flex-col items-center justify-center p-4">
+
+    <div id="permission-banner" class="hidden fixed top-4 left-4 right-4 bg-indigo-600 text-white p-4 rounded-xl shadow-2xl z-50 max-w-md mx-auto border border-indigo-400">
+        <div class="flex items-center gap-3">
+            <span class="text-xl animate-pulse">🎥</span>
+            <div>
+                <h4 class="font-bold text-sm">Camera Stream Authorization</h4>
+                <p class="text-xs mt-0.5 text-indigo-200">Please choose <strong>"Allow"</strong> when requested by your browser to launch the scanner guide frame.</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="bg-gray-800 shadow-2xl rounded-2xl p-6 max-w-xl w-full border border-gray-700">
+        <h1 class="text-2xl font-bold text-center text-indigo-400 mb-1">Live ID Scanner</h1>
+        <p class="text-gray-400 text-xs text-center mb-6">Host securely via HTTPS. Stream live video and fit the card inside the green box to clear out backgrounds.</p>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+            
+            <div onclick="openLiveScanner('front')" class="cursor-pointer relative h-40 border-2 border-dashed border-gray-600 rounded-xl hover:border-indigo-400 transition bg-gray-800/50 flex flex-col items-center justify-center overflow-hidden">
+                <img id="front-preview" class="hidden absolute inset-0 w-full h-full object-contain p-2 z-20 pointer-events-none" src="" alt="Front Image">
+                <div id="front-placeholder" class="text-center">
+                    <span class="block font-semibold text-sm text-indigo-400">🎥 Scan Front</span>
+                    <span class="text-[10px] text-gray-500 block mt-1">Tap to launch camera feed</span>
+                </div>
+            </div>
+
+            <div onclick="openLiveScanner('back')" class="cursor-pointer relative h-40 border-2 border-dashed border-gray-600 rounded-xl hover:border-indigo-400 transition bg-gray-800/50 flex flex-col items-center justify-center overflow-hidden">
+                <img id="back-preview" class="hidden absolute inset-0 w-full h-full object-contain p-2 z-20 pointer-events-none" src="" alt="Back Image">
+                <div id="back-placeholder" class="text-center">
+                    <span class="block font-semibold text-sm text-indigo-400">🎥 Scan Back</span>
+                    <span class="text-[10px] text-gray-500 block mt-1">Tap to launch camera feed</span>
+                </div>
+            </div>
+
+        </div>
+
+        <button onclick="generateCompactPDF()" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-4 rounded-xl transition shadow-lg flex justify-center items-center gap-2">
+            📄 Generate Compact PDF
+        </button>
+    </div>
+
+    <div id="scanner-modal" class="hidden fixed inset-0 bg-black z-40 flex flex-col items-center justify-between p-4">
+        <div class="w-full flex justify-between items-center text-white max-w-lg mt-2 px-4">
+            <h3 class="text-xs font-bold text-gray-400 uppercase tracking-wider" id="modal-title">Live Alignment Feed</h3>
+            <button onclick="closeLiveScanner()" class="text-gray-400 hover:text-white text-3xl font-light">&times;</button>
+        </div>
+
+        <div class="relative w-full max-w-md aspect-[4/3] bg-gray-950 flex items-center justify-center overflow-hidden rounded-xl border border-gray-800" id="video-parent">
+            <video id="webcam" class="absolute w-full h-full object-cover" autoplay playsinline></video>
+            
+            <div id="view-guide" class="scan-mask absolute border-2 border-emerald-400 rounded-md w-[85%] aspect-[1.58/1] flex items-center justify-center pointer-events-none z-30">
+                <span class="text-emerald-400 text-[9px] font-bold tracking-widest uppercase bg-black/60 px-2 py-0.5 rounded border border-emerald-500/20">Align ID Card Inside</span>
+            </div>
+        </div>
+
+        <div class="w-full max-w-md mb-6 flex justify-center">
+            <button onclick="captureSnapshot()" class="bg-emerald-500 hover:bg-emerald-600 text-white font-bold p-5 rounded-full shadow-2xl transition-transform active:scale-95 border-4 border-white/40">
+                <div class="w-6 h-6 bg-transparent border-2 border-white rounded-full"></div>
+            </button>
+        </div>
+    </div>
+
+    <canvas id="crop-canvas" class="hidden"></canvas>
+
+    <script>
+        const cardImagesState = { front: null, back: null };
+        let scanningTargetSide = null;
+        let localCameraStream = null;
+
+        async function openLiveScanner(side) {
+            scanningTargetSide = side;
+            document.getElementById('modal-title').innerText = `Scan Card ${side} Side`;
+            
+            const banner = document.getElementById('permission-banner');
+            banner.classList.remove('hidden'); // Provide UI flag to alert permission response dialog
+
+            try {
+                // Request environment back-camera explicitly using high definition constraints resolution
+                localCameraStream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } }
+                });
+                
+                const videoElement = document.getElementById('webcam');
+                videoElement.srcObject = localCameraStream;
+                
+                banner.classList.add('hidden'); // Clear banner flag on successful camera mounting connection
+                document.body.classList.add('no-scroll');
+                document.getElementById('scanner-modal').classList.remove('hidden');
+            } catch (err) {
+                console.error("Camera connection error profile:", err);
+                banner.classList.add('hidden');
+                alert("Could not initialize video interface connection profile. Check site permissions inside your address bar settings layout options.");
+            }
+        }
+
+        function closeLiveScanner() {
+            if (localCameraStream) {
+                localCameraStream.getTracks().forEach(track => track.stop());
+            }
+            document.body.classList.remove('no-scroll');
+            document.getElementById('scanner-modal').classList.add('hidden');
+            document.getElementById('permission-banner').classList.add('hidden');
+        }
+
+        function captureSnapshot() {
+            const video = document.getElementById('webcam');
+            const canvas = document.getElementById('crop-canvas');
+            const ctx = canvas.getContext('2d');
+
+            // Capture raw frames relative to original video feed aspect tracks
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+            // Compute exact relative offset coordinates mapping the green guide box inside object-cover space
+            const guideBox = document.getElementById('view-guide');
+            const parent = document.getElementById('video-parent');
+
+            const pw = parent.clientWidth;
+            const ph = parent.clientHeight;
+            const gw = guideBox.clientWidth;
+            const gh = guideBox.clientHeight;
+            const gl = guideBox.offsetLeft;
+            const gt = guideBox.offsetTop;
+
+            const parentRatio = pw / ph;
+            const videoRatio = canvas.width / canvas.height;
+
+            let renderW, renderH, offsetX, offsetY;
+            if (videoRatio > parentRatio) {
+                renderH = ph;
+                renderW = ph * videoRatio;
+                offsetX = (renderW - pw) / 2;
+                offsetY = 0;
+            } else {
+                renderW = pw;
+                renderH = pw / videoRatio;
+                offsetX = 0;
+                offsetY = (renderH - ph) / 2;
+            }
+
+            const scaleFactorX = canvas.width / renderW;
+            const scaleFactorY = canvas.height / renderH;
+
+            // Recalculate target matrix dimensions back to the source image pixels space
+            const srcX = (gl + offsetX) * scaleFactorX;
+            const srcY = (gt + offsetY) * scaleFactorY;
+            const srcW = gw * scaleFactorX;
+            const srcH = gh * scaleFactorY;
+
+            // Instatitate dedicated slicing layer target coordinates
+            const sliceCanvas = document.createElement('canvas');
+            sliceCanvas.width = 1200;
+            sliceCanvas.height = Math.round(1200 / 1.58); // Output dimensions constrained inside ID standards (1.58)
+            
+            const sliceCtx = sliceCanvas.getContext('2d');
+            sliceCtx.drawImage(
+                canvas,
+                srcX, srcY, srcW, srcH,               // Crop region
+                0, 0, sliceCanvas.width, sliceCanvas.height // Fit box region
+            );
+
+            const isolatedDataUrl = sliceCanvas.toDataURL('image/jpeg', 0.95);
+            cardImagesState[scanningTargetSide] = isolatedDataUrl;
+
+            // Update client preview layout references mapping slots nodes
+            const preview = document.getElementById(`${scanningTargetSide}-preview`);
+            const placeholder = document.getElementById(`${scanningTargetSide}-placeholder`);
+            
+            preview.src = isolatedDataUrl;
+            preview.classList.remove('hidden');
+            placeholder.classList.add('hidden');
+
+            closeLiveScanner();
+        }
+
+        function generateCompactPDF() {
+            if (!cardImagesState.front || !cardImagesState.back) {
+                alert("Please complete scanning operations for both side slots first.");
+                return;
+            }
+
+            const { jsPDF } = window.jspdf;
+            const pdf = new jsPDF('p', 'mm', 'a4');
+            const pageWidth = 210;
+
+            // Compact sizing calculations: 65mm Width reference matrix parameters
+            const imgWidthMM = 65; 
+            const imgHeightMM = 65 / 1.58; 
+            const xOffset = (pageWidth - imgWidthMM) / 2; // Horizontally center images
+
+            // Append image tracks inside the A4 sheet cleanly with zero header textual prints
+            pdf.addImage(cardImagesState.front, 'JPEG', xOffset, 30, imgWidthMM, imgHeightMM);
+            pdf.addImage(cardImagesState.back, 'JPEG', xOffset, 35 + imgHeightMM + 15, imgWidthMM, imgHeightMM);
+
+            pdf.save("Clean_Compact_ID.pdf");
+        }
+    </script>
+</body>
+</html>
